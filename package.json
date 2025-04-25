@@ -1,0 +1,11 @@
+{
+  "name": "uniiid",
+  "version": "0.0.0",
+  "description": "This library provides generation and parsing of identifiers composed of digits and limited set of latin letters. Goal is ensure easy and reliable voice transmission across different Latin and Cyrillic alphabet language groups. Identifiers is case insensitive and can include hyphens for better readability",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "author": "Casper <casper@g1.team>",
+  "license": "MIT"
+}
