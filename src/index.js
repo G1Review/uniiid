@@ -9,14 +9,23 @@
 
 /** @private @constant {string[]} */
 const LETTERS = ["A", "D", "F", "K", "L", "M", "N", "R", "T", "W", "X", "Y", "Z"];
+
 /** @private @constant {string[]} */
 const DIGITS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
 /** @private @constant {number} Minimum bits required for crypto security */
 const CRYPTO_SAFE_BITS = 128;
+
+/** @private @constant {number} Number of digits for timestamp prefix */
+const TIMESTAMP_PREFIX_LENGTH = 10;
+
+/** @private @constant {string} Prefix letter for timestamp */
+const TIMESTAMP_PREFIX_PAD_LETTER = "A";
 
 class ID {
   #parts;
   #crypto;
+  #timestampPrefixDateOfStartInMinutes;
   #uniques;
   #bits;
   #realSymbols;
@@ -27,13 +36,21 @@ class ID {
    * @param {number} uniques Total number of unique IDs possible
    * @param {number} bits Bits of entropy (= log₂(uniques))
    */
-  constructor(parts, crypto, uniques, bits) {
+  constructor(parts, crypto, timestampPrefixDateOfStart, uniques, bits) {
     this.#parts = parts;
     this.#crypto = crypto;
+    this.#timestampPrefixDateOfStartInMinutes = timestampPrefixDateOfStart
+      ? Math.floor(timestampPrefixDateOfStart.getTime() / 60000)
+      : undefined;
     this.#uniques = uniques;
     this.#bits = bits;
     // Count only the slots that actually consume randomness
     this.#realSymbols = parts.filter((p) => p === "X" || p === "9").length;
+  }
+
+  #currentTimestamp() {
+    const minutesFromStart = Math.floor(Date.now() / 60000) - this.#timestampPrefixDateOfStartInMinutes;
+    return String(minutesFromStart).padStart(TIMESTAMP_PREFIX_LENGTH, TIMESTAMP_PREFIX_PAD_LETTER);
   }
 
   /**
@@ -114,7 +131,35 @@ class ID {
       }
     }
 
+    if (this.#timestampPrefixDateOfStartInMinutes) {
+      return `${this.#currentTimestamp()}-${result}`;
+    }
+
     return result;
+  }
+
+  #sliceTimestampPrefix(id) {
+    const prefix = id.slice(0, TIMESTAMP_PREFIX_LENGTH);
+    const rest = id.slice(TIMESTAMP_PREFIX_LENGTH);
+    return [prefix, rest];
+  }
+
+  #extractTimestampFromPrefix(prefix) {
+    if (prefix.length !== TIMESTAMP_PREFIX_LENGTH) return null;
+    if (LETTERS.includes(prefix[0]) && prefix[0] !== TIMESTAMP_PREFIX_PAD_LETTER) return null;
+    const noPadPrefix = prefix.replaceAll(TIMESTAMP_PREFIX_PAD_LETTER, "");
+    const timestamp = parseInt(noPadPrefix, 10);
+    if (isNaN(timestamp) || timestamp < 0) return null;
+    if (prefix !== String(timestamp).padStart(TIMESTAMP_PREFIX_LENGTH, TIMESTAMP_PREFIX_PAD_LETTER)) return null;
+    return timestamp;
+  }
+
+  parseTimestamp(id) {
+    if (!this.#timestampPrefixDateOfStartInMinutes) return null;
+    const [prefix] = this.#sliceTimestampPrefix(String(id).toUpperCase().trim());
+    const timestamp = this.#extractTimestampFromPrefix(prefix);
+    if (timestamp === null) return null;
+    return new Date((timestamp + this.#timestampPrefixDateOfStartInMinutes) * 60000);
   }
 
   /**
@@ -124,11 +169,24 @@ class ID {
    * @returns {string|null}
    */
   parse(id) {
-    const symbols = String(id)
-      .toUpperCase()
-      .trim()
-      .split("")
-      .filter((c) => LETTERS.includes(c) || DIGITS.includes(c));
+    const incomingString = String(id).toUpperCase().trim();
+
+    let preparedId;
+    let maybePrefix;
+
+    if (this.#timestampPrefixDateOfStartInMinutes) {
+      const [prefix, rest] = this.#sliceTimestampPrefix(incomingString);
+
+      // Check prefix
+      if (!this.#extractTimestampFromPrefix(prefix)) return null;
+
+      preparedId = rest;
+      maybePrefix = prefix;
+    } else {
+      preparedId = incomingString;
+    }
+
+    const symbols = preparedId.split("").filter((c) => LETTERS.includes(c) || DIGITS.includes(c));
 
     if (symbols.length !== this.#realSymbols) return null;
 
@@ -149,7 +207,13 @@ class ID {
       }
     }
 
-    return idx === symbols.length ? out : null;
+    if (idx !== symbols.length) return null;
+
+    if (maybePrefix) {
+      return `${maybePrefix}-${out}`;
+    }
+
+    return out;
   }
 }
 
@@ -158,9 +222,10 @@ class ID {
  *
  * @param {string} mask May include hyphens for readability like "99-XX"
  * @param {boolean} [crypto=false] Whether to use Crypto API for randomness
+ * @param {Date} timestampPrefixDateOfStart When provided IDS prefixed with 8 symbols timestamp in minutes from date of start.
  * @returns {ID}
  */
-export function createID(mask, crypto = false) {
+export function createID(mask, crypto = false, timestampPrefixDateOfStart = undefined) {
   if (typeof mask !== "string") {
     throw new TypeError("Mask must be a string");
   }
@@ -194,5 +259,9 @@ export function createID(mask, crypto = false) {
     throw new Error(`Mask "${mask}" is not crypto-safe: only ${bits} bits (need ≥ ${CRYPTO_SAFE_BITS})`);
   }
 
-  return new ID(parts, crypto, uniques, bits);
+  if (timestampPrefixDateOfStart && timestampPrefixDateOfStart.getTime() > Date.now() - 60000 /* 1 minute in past */) {
+    throw new Error("Date of start must be in the past");
+  }
+
+  return new ID(parts, crypto, timestampPrefixDateOfStart, uniques, bits);
 }
